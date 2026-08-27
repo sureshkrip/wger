@@ -131,8 +131,13 @@ services:
   nginx:
     image: docker.io/nginx:stable
     restart: unless-stopped
-    # Coolify's Traefik proxy routes your domain to this service's port 80.
-    # In the Coolify UI, set the nginx service's Domain to your FQDN (port 80).
+    # Coolify "magic" variable: its presence tells Coolify to generate a
+    # Traefik route for this service on container port 80. After deploy,
+    # Coolify auto-creates an env var named SERVICE_FQDN_NGINX_80 in the UI's
+    # Environment Variables tab -- set its value to your domain, e.g.
+    #   https://wger.apps.predaccure.com
+    environment:
+      - SERVICE_FQDN_NGINX_80
     # `expose` (not `ports`) avoids clashing with Traefik owning host port 80.
     expose:
       - "80"
