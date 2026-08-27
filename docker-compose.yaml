@@ -131,8 +131,10 @@ services:
   nginx:
     image: docker.io/nginx:stable
     restart: unless-stopped
-    # Coolify routes your domain to this service. Locally, browse http://localhost:80
-    ports:
+    # Coolify's Traefik proxy routes your domain to this service's port 80.
+    # In the Coolify UI, set the nginx service's Domain to your FQDN (port 80).
+    # `expose` (not `ports`) avoids clashing with Traefik owning host port 80.
+    expose:
       - "80"
     # nginx config is provided inline (below) instead of a host bind-mount, so
     # there is no fragile relative-path mount for Coolify's daemon to resolve.
