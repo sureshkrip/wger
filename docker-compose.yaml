@@ -142,6 +142,7 @@ services:
     # avoids clashing with Traefik owning host port 80.
     expose:
       - "80"
+      - "8000"
     # nginx config is provided inline (below) instead of a host bind-mount, so
     # there is no fragile relative-path mount for Coolify's daemon to resolve.
     configs:
@@ -174,6 +175,7 @@ configs:
       }
       server {
           listen 80;
+          listen 8000;
           server_name _;
           client_max_body_size 100M;
 
