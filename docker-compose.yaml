@@ -152,11 +152,17 @@ services:
       - media:/wger/media:ro
     depends_on:
       - web
-    # No custom healthcheck: the `service nginx status` command is not reliably
-    # present in the nginx:stable image, and a failing healthcheck makes
-    # Coolify/Traefik treat nginx as unavailable (503). Docker treats a
-    # container with no healthcheck as healthy while running, which is what we
-    # want here -- nginx stays routable as long as the process is up.
+    # Coolify/Traefik only routes to containers it considers healthy, so nginx
+    # MUST have a healthcheck that actually passes. `service nginx status` is
+    # unreliable in nginx:stable and having no healthcheck leaves no "healthy"
+    # status for the proxy to key on -- both caused 503s. `nginx -t` uses the
+    # always-present nginx binary and exits 0 when the config is valid.
+    healthcheck:
+      test: ["CMD-SHELL", "nginx -t || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
 # Inline nginx configuration. Note: nginx runtime variables are written as
 # `$$var` so Docker Compose does NOT interpolate them (it turns `$$` into `$`).
