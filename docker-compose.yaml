@@ -38,8 +38,12 @@ x-app-env: &app-env
   DJANGO_MEDIA_ROOT: /home/wger/media
   DJANGO_STATIC_ROOT: /home/wger/static
 
-  # --- First-boot data sync (optional; adds time to the first startup) ---
-  SYNC_EXERCISES_ON_STARTUP: ${SYNC_EXERCISES_ON_STARTUP:-True}
+  # --- First-boot data sync ---
+  # IMPORTANT: wger's entrypoint runs these BEFORE starting gunicorn, so
+  # enabling them delays the web server from accepting requests (causing
+  # Traefik 503s on boot). Kept False; sync exercises manually after the
+  # stack is up:  docker compose exec web python3 manage.py sync-exercises
+  SYNC_EXERCISES_ON_STARTUP: ${SYNC_EXERCISES_ON_STARTUP:-False}
   DOWNLOAD_EXERCISE_IMAGES_ON_STARTUP: ${DOWNLOAD_EXERCISE_IMAGES_ON_STARTUP:-False}
 
   # --- Locale ---
@@ -69,7 +73,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 60s
+      start_period: 180s
 
   celery_worker:
     image: docker.io/wger/server:latest
