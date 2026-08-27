@@ -42,6 +42,10 @@ x-app-env: &app-env
   # --- Paths ---
   DJANGO_MEDIA_ROOT: /home/wger/media
   DJANGO_STATIC_ROOT: /home/wger/static
+  # Use plain (non-hashed) static storage so `runserver --insecure` can serve
+  # static files. The default LenientManifestStaticFilesStorage produces hashed
+  # filenames that the dev-server static view fails to serve (HTTP 500).
+  DJANGO_STORAGES_STATICFILES_BACKEND: django.contrib.staticfiles.storage.StaticFilesStorage
 
   # --- First-boot data sync (kept off so boots are fast; run manually later) ---
   SYNC_EXERCISES_ON_STARTUP: ${SYNC_EXERCISES_ON_STARTUP:-False}
