@@ -1,16 +1,21 @@
 # =============================================================================
-# wger - self-contained Docker Compose stack for Coolify (and plain `docker compose`)
+# wger - Docker Compose stack for Coolify (single-container web, no nginx)
 #
-# Flattened from the official https://github.com/wger-project/docker stack:
-#   web + postgres + redis + celery worker/beat + nginx.
-# PowerSync (optional mobile offline-sync) is intentionally omitted.
+#   web (Django, serves app + static) + postgres + redis + celery worker/beat
 #
-# In Coolify: create a "Docker Compose" resource pointing at this repo / branch `main`,
-# then set the secrets below (SECRET_KEY, POSTGRES_PASSWORD, SITE_URL, ...) in the UI.
-# Point Coolify's domain at the `nginx` service (port 80).
+# Coolify's Traefik proxy routes cleanly to the `web` service (it would not
+# route to a separate nginx sidecar), so the web container serves static files
+# itself via `runserver --insecure` (DEBUG stays False, so this is safe -- it
+# only tells Django to serve collected static files without DEBUG).
+#
+# In Coolify: set the app's "Domains for web" to your FQDN (leave the other
+# services' domains empty) and set the secrets below (SECRET_KEY,
+# POSTGRES_PASSWORD, SITE_URL, TIME_ZONE) in the Environment Variables tab.
+#
+# NOTE: user-uploaded / exercise media images are not served in this mode.
+# For media, configure S3 storage (AWS_* env vars) later, which wger supports.
 # =============================================================================
 
-# Shared environment for web + celery services (they run the same image).
 x-app-env: &app-env
   # --- Security ---
   SECRET_KEY: ${SECRET_KEY:?set a long random SECRET_KEY}
@@ -18,7 +23,7 @@ x-app-env: &app-env
 
   # --- Site / proxy ---
   SITE_URL: ${SITE_URL:-http://localhost}
-  WGER_USE_GUNICORN: "True"
+  WGER_USE_GUNICORN: "False"
   USE_X_FORWARDED_HOST: "True"
   X_FORWARDED_PROTO_HEADER_SET: "True"
 
@@ -34,15 +39,11 @@ x-app-env: &app-env
   CELERY_BACKEND: redis://cache:6379/2
   USE_CELERY: "True"
 
-  # --- Paths (backed by named volumes shared with nginx) ---
+  # --- Paths ---
   DJANGO_MEDIA_ROOT: /home/wger/media
   DJANGO_STATIC_ROOT: /home/wger/static
 
-  # --- First-boot data sync ---
-  # IMPORTANT: wger's entrypoint runs these BEFORE starting gunicorn, so
-  # enabling them delays the web server from accepting requests (causing
-  # Traefik 503s on boot). Kept False; sync exercises manually after the
-  # stack is up:  docker compose exec web python3 manage.py sync-exercises
+  # --- First-boot data sync (kept off so boots are fast; run manually later) ---
   SYNC_EXERCISES_ON_STARTUP: ${SYNC_EXERCISES_ON_STARTUP:-False}
   DOWNLOAD_EXERCISE_IMAGES_ON_STARTUP: ${DOWNLOAD_EXERCISE_IMAGES_ON_STARTUP:-False}
 
@@ -52,14 +53,22 @@ x-app-env: &app-env
 
 services:
   web:
-    # Prebuilt image = identical to this repo's code. To deploy your own code
-    # changes instead, comment out `image:` and uncomment the `build:` block.
     image: docker.io/wger/server:latest
-    # build:
-    #   context: .
-    #   dockerfile: extras/docker/production/Dockerfile
     restart: unless-stopped
     environment: *app-env
+    # Override the default entrypoint so we can pass --insecure to runserver,
+    # which makes Django serve the collected static files with DEBUG=False.
+    # The steps mirror the image's own entrypoint bootstrap.
+    command:
+      - /bin/bash
+      - -lc
+      - |
+        set -e
+        wger bootstrap --no-process-static
+        python3 manage.py collectstatic --no-input --clear
+        python3 manage.py migrate
+        python3 manage.py set-site-url
+        exec python3 manage.py runserver 0.0.0.0:8000 --insecure
     volumes:
       - media:/home/wger/media
       - static:/home/wger/static
@@ -73,7 +82,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 300s
+      start_period: 120s
 
   celery_worker:
     image: docker.io/wger/server:latest
@@ -131,78 +140,6 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-
-  nginx:
-    image: docker.io/nginx:stable
-    restart: unless-stopped
-    # Domain routing is controlled in the Coolify UI: set the app's
-    # "Domains for nginx" field to your FQDN and leave "Domains for web"
-    # EMPTY, so Coolify's Traefik routes the domain to nginx:80 (which serves
-    # /static and /media and proxies the rest to web). `expose` (not `ports`)
-    # avoids clashing with Traefik owning host port 80.
-    expose:
-      - "80"
-      - "8000"
-    # nginx config is provided inline (below) instead of a host bind-mount, so
-    # there is no fragile relative-path mount for Coolify's daemon to resolve.
-    configs:
-      - source: nginx_conf
-        target: /etc/nginx/conf.d/default.conf
-    volumes:
-      - static:/wger/static:ro
-      - media:/wger/media:ro
-    depends_on:
-      - web
-    # Coolify/Traefik only routes to containers it considers healthy, so nginx
-    # MUST have a healthcheck that actually passes. `service nginx status` is
-    # unreliable in nginx:stable and having no healthcheck leaves no "healthy"
-    # status for the proxy to key on -- both caused 503s. `nginx -t` uses the
-    # always-present nginx binary and exits 0 when the config is valid.
-    healthcheck:
-      test: ["CMD-SHELL", "nginx -t || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
-
-# Inline nginx configuration. Note: nginx runtime variables are written as
-# `$$var` so Docker Compose does NOT interpolate them (it turns `$$` into `$`).
-configs:
-  nginx_conf:
-    content: |
-      upstream wger {
-          server web:8000;
-      }
-      server {
-          listen 80;
-          listen 8000;
-          server_name _;
-          client_max_body_size 100M;
-
-          location /static/ {
-              alias /wger/static/;
-              expires 1y;
-              add_header Cache-Control "public, immutable";
-          }
-          location /media/ {
-              alias /wger/media/;
-              expires 30d;
-              add_header Cache-Control "public";
-          }
-          location / {
-              proxy_pass http://wger;
-              proxy_http_version 1.1;
-              proxy_set_header Host              $$host;
-              proxy_set_header X-Real-IP         $$remote_addr;
-              proxy_set_header X-Forwarded-For   $$proxy_add_x_forwarded_for;
-              proxy_set_header X-Forwarded-Proto $$http_x_forwarded_proto;
-              proxy_set_header X-Forwarded-Host  $$host;
-              proxy_set_header Upgrade           $$http_upgrade;
-              proxy_set_header Connection        "upgrade";
-              proxy_read_timeout  86400;
-              proxy_send_timeout  86400;
-          }
-      }
 
 volumes:
   postgres-data:
