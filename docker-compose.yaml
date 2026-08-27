@@ -73,7 +73,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 180s
+      start_period: 300s
 
   celery_worker:
     image: docker.io/wger/server:latest
@@ -154,6 +154,12 @@ services:
       - media:/wger/media:ro
     depends_on:
       - web
+    healthcheck:
+      test: ["CMD", "service", "nginx", "status"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
 # Inline nginx configuration. Note: nginx runtime variables are written as
 # `$$var` so Docker Compose does NOT interpolate them (it turns `$$` into `$`).
