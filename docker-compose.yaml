@@ -134,12 +134,54 @@ services:
     # Coolify routes your domain to this service. Locally, browse http://localhost:80
     ports:
       - "80"
+    # nginx config is provided inline (below) instead of a host bind-mount, so
+    # there is no fragile relative-path mount for Coolify's daemon to resolve.
+    configs:
+      - source: nginx_conf
+        target: /etc/nginx/conf.d/default.conf
     volumes:
-      - ./extras/coolify/nginx.conf:/etc/nginx/conf.d/default.conf:ro
       - static:/wger/static:ro
       - media:/wger/media:ro
     depends_on:
       - web
+
+# Inline nginx configuration. Note: nginx runtime variables are written as
+# `$$var` so Docker Compose does NOT interpolate them (it turns `$$` into `$`).
+configs:
+  nginx_conf:
+    content: |
+      upstream wger {
+          server web:8000;
+      }
+      server {
+          listen 80;
+          server_name _;
+          client_max_body_size 100M;
+
+          location /static/ {
+              alias /wger/static/;
+              expires 1y;
+              add_header Cache-Control "public, immutable";
+          }
+          location /media/ {
+              alias /wger/media/;
+              expires 30d;
+              add_header Cache-Control "public";
+          }
+          location / {
+              proxy_pass http://wger;
+              proxy_http_version 1.1;
+              proxy_set_header Host              $$host;
+              proxy_set_header X-Real-IP         $$remote_addr;
+              proxy_set_header X-Forwarded-For   $$proxy_add_x_forwarded_for;
+              proxy_set_header X-Forwarded-Proto $$http_x_forwarded_proto;
+              proxy_set_header X-Forwarded-Host  $$host;
+              proxy_set_header Upgrade           $$http_upgrade;
+              proxy_set_header Connection        "upgrade";
+              proxy_read_timeout  86400;
+              proxy_send_timeout  86400;
+          }
+      }
 
 volumes:
   postgres-data:
